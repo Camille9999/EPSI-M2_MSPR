@@ -1,0 +1,16 @@
+# Core processing
+pandas==3.0.2
+
+# Machine learning and feature engineering
+scikit-learn==1.8.0
+numpy==2.4.4
+scipy==1.17.1
+
+# Evaluation & visualisation
+matplotlib==3.10.8
+seaborn==0.13.2
+
+# Dev / utils
+ipykernel==7.2.0
+tqdm==4.67.3
+dotenv==0.9.9

@@ -1,0 +1,45 @@
+= Procédure d'installation
+
+== Installation de Python (Ubuntu)
+
+[source, shell]
+----
+sudo apt update
+sudo apt install python3.12.10
+----
+
+== Récupération du repository
+
+Cloner ce repository :
+[source, shell]
+----
+git clone git@github.com:Camille9999/EPSI-M2_MSPR.git
+----
+
+Se mettre dans le dossier `EPSI-M2_MSPR` :
+[source, shell]
+----
+cd EPSI-M2_MSPR
+----
+
+== Mise en place de l'environnement
+
+Initialiser l'environnement virtuel :
+[source, shell]
+----
+pip install pyenv && pyenv virtualenv 3.12.10 mspr-m2 && echo "mspr-m2" > .python-version
+----
+
+=== Variables d'environnement et libairies python
+
+Copier le template d'environnement est le remplir avec les paramètres souhaités +
+[source, shell]
+----
+cp .env.template .env && sed -i "s|PATH_DATA=.*|PATH_DATA=$(pwd)/src/data|" .env
+----
+
+Installer les librairies python :
+[source, shell]
+----
+pip install -r requirements.txt
+----

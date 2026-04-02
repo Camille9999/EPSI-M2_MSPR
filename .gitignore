@@ -1,0 +1,37 @@
+# ── Python ─────────────────────────────
+__pycache__/
+.python-version
+*.py[cod]
+*.pyo
+*.egg-info/
+.env
+.venv/
+venv/
+*.sqlite3
+
+# ── Jupyter ────────────────────────────
+.ipynb_checkpoints/
+*.ipynb~        # fichiers temporaires
+
+# ── Logs & outputs ─────────────────────
+*.log
+*.out
+*.tmp
+.cache/
+logs/
+outputs/
+data/tmp/
+
+# ── Data files ─────────────────────────
+src/data/*
+
+# ── VS Code ────────────────────────────
+.vscode/
+.history/
+
+# ── Docker / CI ────────────────────────
+*.tar
+# compose / build caches
+**/.docker/
+docker-compose.override.yml
+.env.docker
