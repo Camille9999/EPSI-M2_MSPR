@@ -20,8 +20,8 @@ URLS = [
 
 
 def create_source_directory():
-    """Create PATH_DATA/source directory if it doesn't exist."""
-    source_dir = Path(PATH_DATA) / "source"
+    """Create PATH_DATA/source/RTE directory if it doesn't exist."""
+    source_dir = Path(PATH_DATA) / "source" / "RTE"
     source_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Source directory ready: {source_dir}")
     return source_dir
@@ -57,8 +57,8 @@ def download_file(url, dest_path):
         return False
 
 
-def extract_zip(zip_path, source_dir, year):
-    """Extract all files from zip directly to source directory with year prefix."""
+def extract_zip(zip_path, source_dir):
+    """Extract all files from zip directly to source directory, keeping original names."""
     try:
         logger.info(f"Extracting: {zip_path}")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -79,16 +79,16 @@ def extract_zip(zip_path, source_dir, year):
                     continue
 
                 logger.info(f"Extracting file: {file_info.filename}")
-                # Extract with year prefix to avoid conflicts
                 original_name = Path(file_info.filename).name
-                new_name = f"{year}_{original_name}"
+                if not original_name:
+                    continue
 
                 # Read and write to avoid intermediate folders
                 file_content = zip_ref.read(file_info.filename)
-                dest_path = source_dir / new_name
+                dest_path = source_dir / original_name
                 dest_path.write_bytes(file_content)
                 files_extracted += 1
-                logger.info(f"  Extracted: {new_name} ({len(file_content)} bytes)")
+                logger.info(f"  Extracted: {original_name} ({len(file_content)} bytes)")
 
             if files_extracted == 0:
                 logger.warning(f"No files found in {zip_path}")
@@ -109,8 +109,11 @@ def download_and_extract(url, source_dir):
         zip_filename = f"eCO2mix_RTE_Annuel-Definitif_{year}.zip"
         zip_path = source_dir / zip_filename
 
-        # Check if files from this year already exist
-        existing_files = list(source_dir.glob(f"{year}_*"))
+        # Check if files for this year already exist (year already present in file names)
+        existing_files = [
+            file for file in source_dir.glob(f"*{year}*")
+            if file.is_file() and file.suffix.lower() != ".zip"
+        ]
         if existing_files:
             logger.info(f"Data for year {year} already exists ({len(existing_files)} files), skipping")
             return {"year": year, "success": True, "reason": "already_exists"}
@@ -120,7 +123,7 @@ def download_and_extract(url, source_dir):
             return {"year": year, "success": False, "reason": "download_failed"}
 
         # Extract the file
-        if extract_zip(zip_path, source_dir, year):
+        if extract_zip(zip_path, source_dir):
             # Remove zip file after extraction
             try:
                 zip_path.unlink()
