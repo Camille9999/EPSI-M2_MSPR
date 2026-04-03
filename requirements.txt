@@ -1,6 +1,7 @@
 # Core processing
 pandas==3.0.2
 xlrd==2.0.2
+pyarrow==20.0.0
 
 # Machine learning and feature engineering
 scikit-learn==1.8.0
