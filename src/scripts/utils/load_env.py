@@ -36,5 +36,8 @@ DATA_ANN_DEF_YR_END = int(os.getenv('DATA_ANN_DEF_YR_END', 2024))
 ###############
 #### LIENS ####
 ###############
-
+#### LIENS ####
+###############
+SQR_TX_METRO = os.getenv('SQR_TX_METRO')
+SQR_TN_METRO = os.getenv('SQR_TN_METRO')
 #### !LIENS ####
