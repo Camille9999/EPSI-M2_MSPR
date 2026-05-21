@@ -19,8 +19,7 @@ venv/
 *.tmp
 .cache/
 logs/
-outputs/
-data/tmp/
+models/
 
 # ── Data files ─────────────────────────
 src/data/*
