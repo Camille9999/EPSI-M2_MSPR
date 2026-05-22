@@ -1,0 +1,17 @@
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.ipynb
+.pytest_cache
+.ruff_cache
+.venv
+venv
+.env
+
+doc
+tests
+src/data
+src/models
