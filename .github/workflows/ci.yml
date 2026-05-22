@@ -11,6 +11,8 @@ on:
     paths-ignore:
       - "README.md"
       - "doc/**"
+env:
+  PYTHONPATH: ${{ github.workspace }}
 
 jobs:
   ci:
