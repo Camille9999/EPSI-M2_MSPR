@@ -1,0 +1,26 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Models are generated at runtime — mount so both services share them
+      - ./src/models:/app/src/models
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./src/models:/app/src/models
+    environment:
+      - MODELS_DIR=/app/src/models
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+    restart: unless-stopped
