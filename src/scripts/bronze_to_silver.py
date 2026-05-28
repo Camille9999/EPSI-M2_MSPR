@@ -1,7 +1,9 @@
 import argparse
+import json
 import logging
 from pathlib import Path
 
+import joblib
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
@@ -169,7 +171,7 @@ def prepare_sqr_pca_features(sqr_df: pd.DataFrame, rte_dates: pd.Series, n_compo
         columns=pca_feature_names,
     ).reset_index()
 
-    return sqr_pca_features
+    return sqr_pca_features, pca_pipeline, temperature_columns
 
 
 def build_silver_dataset(rte_bronze_path: Path, sqr_bronze_path: Path, output_path: Path, n_components: int) -> Path:
@@ -177,7 +179,9 @@ def build_silver_dataset(rte_bronze_path: Path, sqr_bronze_path: Path, output_pa
     sqr_bronze = load_parquet(sqr_bronze_path, "SQR bronze")
 
     daily_rte = prepare_rte_daily_features(rte_bronze)
-    sqr_pca_features = prepare_sqr_pca_features(sqr_bronze, daily_rte["date"], n_components=n_components)
+    sqr_pca_features, pca_pipeline, pca_columns = prepare_sqr_pca_features(
+        sqr_bronze, daily_rte["date"], n_components=n_components
+    )
 
     silver_df = (
         daily_rte.merge(sqr_pca_features, on="date", how="inner", validate="one_to_one")
@@ -188,9 +192,18 @@ def build_silver_dataset(rte_bronze_path: Path, sqr_bronze_path: Path, output_pa
     output_path.parent.mkdir(parents=True, exist_ok=True)
     silver_df.to_parquet(output_path, index=False, compression="snappy")
 
+    # Persist the fitted PCA pipeline so downstream consumers (API) can apply it at inference.
+    pca_dir = output_path.parent
+    pca_pipeline_path = pca_dir / "pca_pipeline.pkl"
+    pca_columns_path = pca_dir / "pca_columns.json"
+    joblib.dump(pca_pipeline, pca_pipeline_path)
+    pca_columns_path.write_text(json.dumps(pca_columns), encoding="utf-8")
+
     logger.info("Silver dataset written to: %s", output_path)
     logger.info("Silver shape: %s", silver_df.shape)
     logger.info("Silver columns: %s", list(silver_df.columns))
+    logger.info("PCA pipeline saved to: %s", pca_pipeline_path)
+    logger.info("PCA columns saved to:  %s", pca_columns_path)
 
     return output_path
 

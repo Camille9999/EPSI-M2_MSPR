@@ -4,8 +4,8 @@ Each training run creates a **dedicated subdirectory** inside ``src/models/``
 (or ``--output-dir``) named after the ``run_id`` timestamp:
 
   {output_dir}/{run_id}/
-    sarima_h{horizon}_{run_id}.pkl    — fitted SARIMAXResults (joblib)
-    scaler_h{horizon}_{run_id}.pkl    — StandardScaler for continuous exog columns
+    sarima_{run_id}.pkl              — fitted SARIMAXResults (joblib)
+    scaler_{run_id}.pkl              — StandardScaler for continuous exog columns
     sarima_run_{run_id}.json          — complete run metadata (all hyperparams + metrics)
     sarima_run_{run_id}_report.md     — human-readable monitoring report
   {output_dir}/
@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -89,7 +90,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 FORBIDDEN_COLUMNS: frozenset[str] = frozenset({"prevision_j1_mw", "prevision_j_mw"})
-HORIZONS: list[int] = [1]
 
 # Features selected from the SARIMAX probe model analysis (p-value < 0.001).
 # Calendar cyclicals (dow_sin/cos, doy_sin/cos, is_weekend) are excluded:
@@ -357,7 +357,6 @@ def fit_model(
     order: tuple[int, int, int],
     seasonal_order: tuple[int, int, int, int],
     scale_cols: list[str],
-    horizon: int,
 ) -> tuple:
     """Fit a final SARIMAX model on the full series.
 
@@ -371,8 +370,6 @@ def fit_model(
         SARIMA orders.
     scale_cols :
         Continuous columns to standardise before fitting.
-    horizon :
-        Forecast horizon (for logging only).
 
     Returns
     -------
@@ -381,10 +378,9 @@ def fit_model(
         ordered list of exogenous column names.
     """
     logger.info(
-        "Fitting SARIMAX%s × %s for horizon t+%d  (n=%d days) …",
+        "Fitting SARIMAX%s × %s  (n=%d days) …",
         order,
         seasonal_order,
-        horizon,
         len(ts),
     )
 
@@ -465,7 +461,6 @@ def compute_insample_metrics(model_result, ts: pd.Series) -> dict[str, float]:
 def save_artefacts(
     output_dir: Path,
     run_id: str,
-    horizon: int,
     model_result,
     scaler: StandardScaler,
     exog_columns: list[str],
@@ -479,8 +474,8 @@ def save_artefacts(
     """Serialise model and scaler with a unique run-stamped filename."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    model_path = output_dir / f"sarima_h{horizon}_{run_id}.pkl"
-    scaler_path = output_dir / f"scaler_h{horizon}_{run_id}.pkl"
+    model_path = output_dir / f"sarima_{run_id}.pkl"
+    scaler_path = output_dir / f"scaler_{run_id}.pkl"
 
     joblib.dump(model_result, model_path)
     joblib.dump(scaler, scaler_path)
@@ -489,7 +484,6 @@ def save_artefacts(
     logger.info("Saved scaler → %s", scaler_path)
 
     return {
-        "horizon": horizon,
         "model_type": "SARIMAX",
         "order": list(order),
         "seasonal_order": list(seasonal_order),
@@ -505,6 +499,7 @@ def save_artefacts(
         "artefacts": {
             "model": model_path.name,
             "scaler": scaler_path.name,
+            # pca_pipeline and pca_columns are populated later by copy_pca_artefacts()
         },
         "goodness_of_fit": {
             "aic": round(float(model_result.aic), 2),
@@ -513,6 +508,38 @@ def save_artefacts(
         },
         "insample_metrics": metrics,
     }
+
+
+# ---------------------------------------------------------------------------
+# PCA artefact propagation
+# ---------------------------------------------------------------------------
+
+
+def copy_pca_artefacts(silver_path: Path, run_dir: Path, meta: dict) -> None:
+    """Copy ``pca_pipeline.pkl`` and ``pca_columns.json`` from the silver directory
+    into *run_dir* and register them in *meta['artefacts']*.
+
+    If the files are not found (old silver build without persistence) a warning
+    is emitted and inference will fall back to raw PCA inputs.
+    """
+    silver_dir = silver_path.parent
+    src_pipeline = silver_dir / "pca_pipeline.pkl"
+    src_columns = silver_dir / "pca_columns.json"
+
+    if src_pipeline.exists() and src_columns.exists():
+        dst_pipeline = run_dir / "pca_pipeline.pkl"
+        dst_columns = run_dir / "pca_columns.json"
+        shutil.copy2(src_pipeline, dst_pipeline)
+        shutil.copy2(src_columns, dst_columns)
+        meta["artefacts"]["pca_pipeline"] = dst_pipeline.name
+        meta["artefacts"]["pca_columns"] = dst_columns.name
+        logger.info("PCA pipeline copied → %s", dst_pipeline)
+    else:
+        logger.warning(
+            "PCA artefacts not found in silver directory (%s). "
+            "Re-run bronze_to_silver.py to generate them.",
+            silver_dir,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -544,22 +571,20 @@ def _write_training_report(
     features: list[str],
     train_start: str | None,
     train_end: str | None,
-    all_metadata: list[dict],
-    model_results_by_horizon: dict[int, object],
+    meta: dict,
+    model_result,
 ) -> Path:
     """Write a human-readable Markdown monitoring report for this training run."""
     _ALERT_MULTIPLIER = 2.0
     report_path = output_dir / f"sarima_run_{run_id}_report.md"
 
-    trained_at = all_metadata[0]["trained_at"] if all_metadata else "—"
-    data_start = all_metadata[0]["training_start"] if all_metadata else "—"
-    data_end = all_metadata[0]["training_end"] if all_metadata else "—"
-    n_days = all_metadata[0]["n_training_days"] if all_metadata else 0
-
-    resid_stats = {
-        h: _compute_residual_stats(mr)
-        for h, mr in sorted(model_results_by_horizon.items())
-    }
+    trained_at = meta.get("trained_at", "—")
+    data_start = meta.get("training_start", "—")
+    data_end = meta.get("training_end", "—")
+    n_days = meta.get("n_training_days", 0)
+    m = meta.get("insample_metrics", {})
+    gof = meta.get("goodness_of_fit", {})
+    stats = _compute_residual_stats(model_result)
 
     lines: list[str] = [
         f"# Rapport d'entraînement SARIMA — Run `{run_id}`",
@@ -584,43 +609,31 @@ def _write_training_report(
         "",
         "## Qualité du modèle (métriques in-sample)",
         "",
-        "| Horizon | MAE (MW) | RMSE (MW) | MAPE (%) | AIC | BIC |",
-        "|---------|----------|-----------|----------|-----|-----|",
-    ]
-
-    for meta in all_metadata:
-        h = meta["horizon"]
-        m = meta.get("insample_metrics", {})
-        gof = meta.get("goodness_of_fit", {})
-        lines.append(
-            f"| t+{h} "
+        "| MAE (MW) | RMSE (MW) | MAPE (%) | AIC | BIC |",
+        "|----------|-----------|----------|-----|-----|",
+        (
             f"| {m.get('insample_MAE_MW', '—')} "
             f"| {m.get('insample_RMSE_MW', '—')} "
             f"| {m.get('insample_MAPE_pct', '—')} "
             f"| {gof.get('aic', '—')} "
             f"| {gof.get('bic', '—')} |"
-        )
-
-    lines += ["", "---", "", "## Analyse des résidus", ""]
-
-    for h, stats in resid_stats.items():
-        lines += [
-            f"### Horizon t+{h}",
-            "",
-            "| Statistique | Valeur |",
-            "|-------------|--------|",
-            f"| Moyenne | {stats['mean']:.2f} MW |",
-            f"| Écart-type (σ) | {stats['std']:.2f} MW |",
-            f"| Min | {stats['min']:.2f} MW |",
-            f"| Max | {stats['max']:.2f} MW |",
-            f"| Skewness | {stats['skewness']:.4f} |",
-            f"| Kurtosis (excess) | {stats['kurtosis']:.4f} |",
-            f"| Résidus dans ±1σ | {stats['within_1sigma_pct']:.1f}% |",
-            f"| Résidus dans ±2σ | {stats['within_2sigma_pct']:.1f}% |",
-            "",
-        ]
-
-    lines += [
+        ),
+        "",
+        "---",
+        "",
+        "## Analyse des résidus",
+        "",
+        "| Statistique | Valeur |",
+        "|-------------|--------|",
+        f"| Moyenne | {stats['mean']:.2f} MW |",
+        f"| Écart-type (σ) | {stats['std']:.2f} MW |",
+        f"| Min | {stats['min']:.2f} MW |",
+        f"| Max | {stats['max']:.2f} MW |",
+        f"| Skewness | {stats['skewness']:.4f} |",
+        f"| Kurtosis (excess) | {stats['kurtosis']:.4f} |",
+        f"| Résidus dans ±1σ | {stats['within_1sigma_pct']:.1f}% |",
+        f"| Résidus dans ±2σ | {stats['within_2sigma_pct']:.1f}% |",
+        "",
         "---",
         "",
         "## Seuils de monitoring",
@@ -629,28 +642,29 @@ def _write_training_report(
         " En production, un dépassement des seuils ci-dessous"
         " indique la nécessité d'un ré-entraînement.",
         "",
-        "| Horizon | Métrique | Baseline | Seuil d'alerte |",
-        "|---------|----------|----------|----------------|",
+        "| Métrique | Baseline | Seuil d'alerte |",
+        "|----------|----------|----------------|",
     ]
 
-    for meta in all_metadata:
-        h = meta["horizon"]
-        m = meta.get("insample_metrics", {})
-        for metric_key, label in [
-            ("insample_MAE_MW", "MAE (MW)"),
-            ("insample_RMSE_MW", "RMSE (MW)"),
-            ("insample_MAPE_pct", "MAPE (%)"),
-        ]:
-            baseline = m.get(metric_key)
-            if baseline is not None:
-                alert = round(baseline * _ALERT_MULTIPLIER, 2)
-                lines.append(f"| t+{h} | {label} | {baseline} | {alert} |")
+    for metric_key, label in [
+        ("insample_MAE_MW", "MAE (MW)"),
+        ("insample_RMSE_MW", "RMSE (MW)"),
+        ("insample_MAPE_pct", "MAPE (%)"),
+    ]:
+        baseline = m.get(metric_key)
+        if baseline is not None:
+            alert = round(baseline * _ALERT_MULTIPLIER, 2)
+            lines.append(f"| {label} | {baseline} | {alert} |")
 
-    lines += ["", "---", "", "## Artefacts générés", ""]
-    for meta in all_metadata:
-        art = meta["artefacts"]
-        lines += [f"- `{art['model']}`", f"- `{art['scaler']}`"]
+    art = meta["artefacts"]
     lines += [
+        "",
+        "---",
+        "",
+        "## Artefacts générés",
+        "",
+        f"- `{art['model']}`",
+        f"- `{art['scaler']}`",
         f"- `sarima_run_{run_id}.json`",
         f"- `sarima_run_{run_id}_report.md`",
         "",
@@ -664,7 +678,7 @@ def _write_training_report(
 def _update_registry(
     output_dir: Path,
     run_id: str,
-    all_metadata: list[dict],
+    meta: dict,
 ) -> None:
     """Append this run to ``sarima_metadata.json`` and keep the last REGISTRY_MAX_RUNS."""
     registry_path = output_dir / "sarima_metadata.json"
@@ -679,23 +693,20 @@ def _update_registry(
     entry: dict = {
         "run_id": run_id,
         "run_dir": run_id,
-        "trained_at": all_metadata[0]["trained_at"] if all_metadata else "",
-        "order": all_metadata[0]["order"] if all_metadata else [],
-        "seasonal_order": all_metadata[0]["seasonal_order"] if all_metadata else [],
-        "features": all_metadata[0]["features"] if all_metadata else [],
-        "training_start": all_metadata[0]["training_start"] if all_metadata else "",
-        "training_end": all_metadata[0]["training_end"] if all_metadata else "",
-        "n_training_days": all_metadata[0]["n_training_days"] if all_metadata else 0,
-        "models": {
-            f"h{meta['horizon']}": {
-                "model_file": meta["artefacts"]["model"],
-                "scaler_file": meta["artefacts"]["scaler"],
-                "metadata_file": f"sarima_run_{run_id}.json",
-                "report_file": f"sarima_run_{run_id}_report.md",
-                "insample_metrics": meta.get("insample_metrics", {}),
-                "goodness_of_fit": meta.get("goodness_of_fit", {}),
-            }
-            for meta in all_metadata
+        "trained_at": meta.get("trained_at", ""),
+        "order": meta.get("order", []),
+        "seasonal_order": meta.get("seasonal_order", []),
+        "features": meta.get("features", []),
+        "training_start": meta.get("training_start", ""),
+        "training_end": meta.get("training_end", ""),
+        "n_training_days": meta.get("n_training_days", 0),
+        "model": {
+            "model_file": meta["artefacts"]["model"],
+            "scaler_file": meta["artefacts"]["scaler"],
+            "metadata_file": f"sarima_run_{run_id}.json",
+            "report_file": f"sarima_run_{run_id}_report.md",
+            "insample_metrics": meta.get("insample_metrics", {}),
+            "goodness_of_fit": meta.get("goodness_of_fit", {}),
         },
     }
 
@@ -740,48 +751,43 @@ def main() -> None:
         train_end=args.train_end,
     )
 
-    # 2. Select and validate the feature set (same for all horizons)
+    # 2. Select and validate the feature set
     exog_df = select_features(exog_all, args.features)
     logger.info("Selected features: %s", list(exog_df.columns))
 
-    # 3. Train one model per horizon and collect metadata
-    all_metadata: list[dict] = []
-    model_results_by_horizon: dict[int, object] = {}
+    # 3. Train the model and collect metadata
+    model_result, scaler, exog_columns = fit_model(
+        ts=ts,
+        exog_df=exog_df,
+        order=order,
+        seasonal_order=seasonal_order,
+        scale_cols=scale_columns,
+    )
 
-    for horizon in HORIZONS:
-        model_result, scaler, exog_columns = fit_model(
-            ts=ts,
-            exog_df=exog_df,
-            order=order,
-            seasonal_order=seasonal_order,
-            scale_cols=scale_columns,
-            horizon=horizon,
-        )
-        model_results_by_horizon[horizon] = model_result
+    metrics = compute_insample_metrics(model_result, ts)
+    logger.info("In-sample metrics: %s", metrics)
 
-        metrics = compute_insample_metrics(model_result, ts)
-        logger.info("In-sample metrics (t+%d): %s", horizon, metrics)
+    meta = save_artefacts(
+        output_dir=run_dir,
+        run_id=run_id,
+        model_result=model_result,
+        scaler=scaler,
+        exog_columns=exog_columns,
+        order=order,
+        seasonal_order=seasonal_order,
+        ts=ts,
+        train_start=args.train_start,
+        train_end=args.train_end,
+        metrics=metrics,
+    )
 
-        meta = save_artefacts(
-            output_dir=run_dir,
-            run_id=run_id,
-            horizon=horizon,
-            model_result=model_result,
-            scaler=scaler,
-            exog_columns=exog_columns,
-            order=order,
-            seasonal_order=seasonal_order,
-            ts=ts,
-            train_start=args.train_start,
-            train_end=args.train_end,
-            metrics=metrics,
-        )
-        all_metadata.append(meta)
+    # 3b. Copy PCA artefacts from silver directory into the run directory
+    copy_pca_artefacts(args.silver_path, run_dir, meta)
 
     # 4. Write per-run metadata JSON
     run_meta_path = run_dir / f"sarima_run_{run_id}.json"
     with run_meta_path.open("w", encoding="utf-8") as fh:
-        json.dump({"run_id": run_id, "models": all_metadata}, fh, indent=2, ensure_ascii=False)
+        json.dump({"run_id": run_id, "model": meta}, fh, indent=2, ensure_ascii=False)
     logger.info("Run metadata written → %s", run_meta_path)
 
     # 5. Write training / monitoring report
@@ -793,15 +799,15 @@ def main() -> None:
         features=args.features,
         train_start=args.train_start,
         train_end=args.train_end,
-        all_metadata=all_metadata,
-        model_results_by_horizon=model_results_by_horizon,
+        meta=meta,
+        model_result=model_result,
     )
 
     # 6. Update cumulative registry
     _update_registry(
         output_dir=args.output_dir,
         run_id=run_id,
-        all_metadata=all_metadata,
+        meta=meta,
     )
 
     logger.info("=" * 60)
