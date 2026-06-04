@@ -205,7 +205,7 @@ def test_streamlit_homepage_renders_registered_runs_with_playwright(tmp_path):
                 ]
                 for nav_label, expected_title in pages:
                     page.get_by_role("link", name=nav_label).click()
-                    expect(page.get_by_text(expected_title)).to_be_visible()
+                    expect(page.get_by_text(expected_title).first).to_be_visible()
                     _assert_no_streamlit_exception(page, expect)
 
                 browser.close()
