@@ -43,3 +43,53 @@ Installer les librairies python :
 ----
 pip install -r requirements.txt
 ----
+
+== Tests
+
+Les tests peuvent être lancés manuellement avec `pytest`.
+Ils sont aussi destinés à être exécutés automatiquement par la CI si une pipeline est configurée.
+Les tests E2E démarrent Streamlit eux-mêmes : il n'est pas nécessaire de lancer Streamlit ou Uvicorn avant.
+
+Installer le navigateur Chromium utilisé par Playwright :
+[source, shell]
+----
+python -m playwright install chromium
+----
+
+Lancer toute la suite de tests :
+[source, shell]
+----
+pytest
+----
+
+Lancer uniquement les tests d'intégration :
+[source, shell]
+----
+pytest tests/integration/test_integration.py
+----
+
+Lancer uniquement les tests E2E Streamlit :
+[source, shell]
+----
+pytest tests/e2e/test_e2e.py
+----
+
+Pour observer le test E2E dans un navigateur visible :
+[source, shell]
+----
+PLAYWRIGHT_HEADLESS=0 PLAYWRIGHT_SLOW_MO=500 pytest -s tests/e2e/test_e2e.py
+----
+
+Explication des options :
+
+* `PLAYWRIGHT_HEADLESS=0` : affiche Chromium au lieu de l'exécuter en arrière-plan.
+* `PLAYWRIGHT_SLOW_MO=500` : ajoute 500 ms entre les actions Playwright pour faciliter l'observation.
+* `pytest -s` : affiche les sorties du test, notamment l'URL temporaire Streamlit utilisée pendant le test.
+
+Mode debug avec l'inspecteur Playwright :
+[source, shell]
+----
+PWDEBUG=1 pytest -s tests/e2e/test_e2e.py
+----
+
+`PWDEBUG=1` ouvre l'inspecteur Playwright et met le test en pause pour inspecter les éléments, tester des locators et avancer étape par étape.

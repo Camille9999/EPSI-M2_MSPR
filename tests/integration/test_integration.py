@@ -1,13 +1,30 @@
+import json
 import sys
 from importlib import import_module
 from pathlib import Path
 
+import joblib
 import pandas as pd
+import pytest
 
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "src" / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+class FakeApiModel:
+    def forecast(self, steps, exog):
+        return pd.Series([1000.0 + float(exog[0, -1])])
+
+
+class FakeApiScaler:
+    def transform(self, values):
+        return values
 
 
 def _write_rte_raw_file(path: Path) -> None:
@@ -29,6 +46,66 @@ def _write_sqr_raw_file(path: Path, values: list[float]) -> None:
         rows.append(f"2024010{day};{value}")
 
     path.write_text("\n".join([*metadata, *rows]), encoding="utf-8")
+
+
+def _write_api_model_registry(models_dir: Path) -> str:
+    run_id = "test_run_20240101"
+    run_dir = models_dir / run_id
+    run_dir.mkdir(parents=True)
+
+    joblib.dump(FakeApiModel(), run_dir / "model.pkl")
+    joblib.dump(FakeApiScaler(), run_dir / "scaler.pkl")
+
+    model_metadata = {
+        "run_id": run_id,
+        "model": {
+            "features": ["temp_pc_01", "production_mw_lag1"],
+            "scale_columns": ["temp_pc_01", "production_mw_lag1"],
+            "target_column": "consommation_mw",
+            "order": [1, 0, 0],
+            "seasonal_order": [0, 0, 0, 0],
+            "training_start": "2024-01-01",
+            "training_end": "2024-01-05",
+            "n_training_days": 5,
+        },
+    }
+    (run_dir / "metadata.json").write_text(
+        json.dumps(model_metadata),
+        encoding="utf-8",
+    )
+
+    registry = {
+        "latest_run_id": run_id,
+        "n_runs": 1,
+        "runs": [
+            {
+                "run_id": run_id,
+                "run_dir": run_id,
+                "trained_at": "2024-01-06T00:00:00Z",
+                "training_start": "2024-01-01",
+                "training_end": "2024-01-05",
+                "n_training_days": 5,
+                "features": ["temp_pc_01", "production_mw_lag1"],
+                "order": [1, 0, 0],
+                "seasonal_order": [0, 0, 0, 0],
+                "model": {
+                    "model_file": "model.pkl",
+                    "scaler_file": "scaler.pkl",
+                    "metadata_file": "metadata.json",
+                    "insample_metrics": {
+                        "insample_MAE_MW": 1.2,
+                        "insample_RMSE_MW": 1.5,
+                        "insample_MAPE_pct": 0.1,
+                    },
+                },
+            }
+        ],
+    }
+    (models_dir / "sarima_metadata.json").write_text(
+        json.dumps(registry),
+        encoding="utf-8",
+    )
+    return run_id
 
 
 def test_raw_to_bronze_to_silver_to_training_input_pipeline(tmp_path):
@@ -82,3 +159,71 @@ def test_raw_to_bronze_to_silver_to_training_input_pipeline(tmp_path):
     assert list(exog_df.columns) == train_sarima.DEFAULT_FEATURES
     assert "production_mw_lag1" in exog_all.columns
     assert scale_columns == train_sarima.DEFAULT_FEATURES
+
+
+def test_api_serves_registered_model_metadata_and_predictions(tmp_path, monkeypatch):
+    from src.api import main as api_main
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    run_id = _write_api_model_registry(models_dir)
+
+    monkeypatch.setattr(api_main, "MODEL_DIR", models_dir)
+    monkeypatch.setattr(api_main, "REGISTRY_PATH", models_dir / "sarima_metadata.json")
+    api_main._cache.clear()
+    api_main._latest_run_id = None
+
+    api_main._startup_load()
+
+    assert api_main.health().model_dump() == {
+        "status": "ok",
+        "model_loaded": True,
+        "latest_run_id": run_id,
+        "model_name": "SARIMAX(1, 0, 0)x(0, 0, 0, 0)",
+    }
+
+    runs = [run.model_dump() for run in api_main.list_runs()]
+    assert runs[0]["run_id"] == run_id
+    assert runs[0]["mae_mw"] == 1.2
+
+    metadata = api_main.get_metadata().model_dump()
+    assert metadata["run_id"] == run_id
+    assert metadata["target_name"] == "consommation_mw"
+    assert metadata["user_inputs"] == [
+        "temp_min_avg",
+        "temp_max_avg",
+        "production_mw_lag1",
+    ]
+    assert metadata["internal_features"] == ["temp_pc_01", "production_mw_lag1"]
+    assert metadata["pca_available"] is False
+
+    prediction = api_main.predict(
+        api_main.PredictRequest(
+            temp_min_avg=4.0,
+            temp_max_avg=12.0,
+            production_mw_lag1=250.0,
+        )
+    ).model_dump()
+    assert prediction["run_id"] == run_id
+    assert prediction["prediction"] == 1250.0
+    assert prediction["pca_components"] == []
+
+
+def test_api_returns_404_for_unknown_run_id(tmp_path, monkeypatch):
+    from src.api import main as api_main
+
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    _write_api_model_registry(models_dir)
+
+    monkeypatch.setattr(api_main, "MODEL_DIR", models_dir)
+    monkeypatch.setattr(api_main, "REGISTRY_PATH", models_dir / "sarima_metadata.json")
+    api_main._cache.clear()
+    api_main._latest_run_id = None
+
+    api_main._startup_load()
+
+    with pytest.raises(api_main.HTTPException) as exc_info:
+        api_main.get_metadata(run_id="unknown_run")
+
+    assert exc_info.value.status_code == 404

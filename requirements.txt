@@ -16,15 +16,18 @@ matplotlib==3.10.8
 seaborn==0.13.2
 
 # Frontend
-streamlit>=1.35.0
+streamlit==1.58.0
 plotly>=5.22.0
 
 # API
-fastapi>=0.111.0
+fastapi>=0.121.0
+starlette>=0.47.2
 uvicorn[standard]>=0.29.0
 pydantic>=2.7.0
 
 # Dev / utils
 ipykernel==7.2.0
+pytest==9.0.3
+playwright>=1.56.0
 tqdm==4.67.3
 dotenv==0.9.9
