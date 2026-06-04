@@ -1,16 +1,24 @@
 import argparse
 import json
 import logging
+import sys
 from pathlib import Path
 
 import joblib
 import pandas as pd
 from sklearn.decomposition import PCA
-from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
-from utils.load_env import PATH_DATA
+# Make the repository root importable so the persisted FunctionTransformer
+# below can be re-loaded by any consumer (e.g. the API) via the stable
+# qualified name ``src.scripts.utils.preprocessing._forward_fill_impute``.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from utils.load_env import PATH_DATA  # noqa: E402
+from src.scripts.utils.preprocessing import _forward_fill_impute  # noqa: E402
 
 
 logging.basicConfig(
@@ -128,7 +136,7 @@ def build_pca_pipeline(n_components: int) -> Pipeline:
     return Pipeline(
         memory=None,
         steps=[
-            ("imputer", SimpleImputer(strategy="median")),
+            ("imputer", FunctionTransformer(_forward_fill_impute, validate=False)),
             ("scaler", StandardScaler()),
             ("pca", PCA(n_components=n_components, random_state=42)),
         ],
