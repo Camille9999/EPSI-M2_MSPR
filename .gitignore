@@ -27,6 +27,7 @@ src/data/*
 # ── VS Code ────────────────────────────
 .vscode/
 .history/
+AGENTS.md
 
 # ── Docker / CI ────────────────────────
 *.tar

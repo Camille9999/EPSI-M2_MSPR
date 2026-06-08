@@ -5,11 +5,25 @@ on:
 
 jobs:
   deploy-prod:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: production
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/vps_deploy_key
+          chmod 600 ~/.ssh/vps_deploy_key
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Simulate deploy to production
-        run: echo "Deploying application to PRODUCTION environment"
+      - name: Deploy on VPS
+        run: |
+          ssh -i ~/.ssh/vps_deploy_key "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" <<'EOF'
+            set -e
+            cd ~/EPSI-M2_MSPR
+            git pull --ff-only origin main
+            docker-compose up -d --build
+            docker-compose ps
+          EOF
+
+      - name: Check production API health
+        run: curl --fail --retry 10 --retry-delay 3 https://api.mspr-energy.fr/health
