@@ -9,6 +9,9 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from loader import MODELS_DIR, build_registry_table, list_runs, load_registry
 
+APP_NAME = "MSPR Energy App"
+APP_VERSION = "v1.0.0"
+
 st.set_page_config(
     page_title="SARIMA Monitoring — EDF",
     page_icon="⚡",
@@ -16,6 +19,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.caption(f"{APP_NAME}  \nversion : {APP_VERSION}")
 st.title("⚡ SARIMA Monitoring — Consommation électrique EDF")
 st.markdown(
     "Dashboard de suivi des modèles SARIMAX entraînés sur les données RTE éco2mix et les Séries Quotidiennes de Référence (SQR) de Météo France."
